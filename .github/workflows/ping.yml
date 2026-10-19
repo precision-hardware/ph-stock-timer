@@ -1,26 +1,25 @@
 name: Ping stock refresh
 
 on:
-  schedule:
-    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
   workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
 
 permissions:
+  actions: write
   contents: write
+
+concurrency:
+  group: stock-ping
+  cancel-in-progress: false
 
 jobs:
   ping:
     name: Ask the site to refresh stock
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
-
-      - name: Refresh stock on the site
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl --fail --silent --show-error --max-time 90 \
-            "https://precisionhardware.net/api/stock-refresh"
 
       - name: Keep this schedule from going idle
         shell: bash
@@ -35,3 +34,30 @@ jobs:
           git config user.email "stock-timer@users.noreply.github.com"
           git commit --allow-empty -m "Keep the stock timer scheduled."
           git push
+
+      - name: Refresh every 15 minutes
+        shell: bash
+        run: |
+          set -uo pipefail
+          last=0
+          for i in $(seq 1 16); do
+            if curl --fail --silent --show-error --retry 2 --retry-all-errors --retry-delay 15 --max-time 90 \
+              "https://precisionhardware.net/api/stock-refresh"; then
+              echo "pass $i refreshed"
+              last=0
+            else
+              echo "pass $i failed"
+              last=1
+            fi
+            if [ "$i" -lt 16 ]; then
+              sleep 900
+            fi
+          done
+          exit "$last"
+
+      - name: Start the next window
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh workflow run ping.yml --ref main
